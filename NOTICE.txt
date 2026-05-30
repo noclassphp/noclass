@@ -1,0 +1,30 @@
+NoClass™ PHP Procedural Framework
+
+Copyright 2024-2026 Danny Mbanginu.
+
+Licensed under the Apache License, Version 2.0.
+See the LICENSE file for details.
+
+NoClass™ was originally created by Danny Mbanginu in 2024.
+
+NoClass™ is an open-source procedural PHP MVC framework designed for
+developers who prefer building applications without user-defined PHP
+classes while still maintaining a structured, modular, and maintainable
+application architecture.
+
+NoClass™ and the NoClass™ project branding are trademarks of Danny Mbanginu.
+
+The NoClass™ name, logo, visual identity, and related project branding are
+not licensed under the Apache License, Version 2.0. Use of the NoClass™
+name and branding is governed separately by the project trademark policy.
+
+This product may include third-party software, libraries, tools, or assets.
+Where applicable, such third-party components remain subject to their own
+licence terms and attribution requirements.
+
+The NoClass™ project may also provide optional commercial products,
+services, modules, integrations, training, support offerings, or hosted
+solutions under separate licence agreements where applicable.
+
+Such offerings do not alter the Apache License, Version 2.0 licensing of
+the NoClass™ Framework core.

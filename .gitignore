@@ -1,0 +1,64 @@
+#
+# NoClass™ PHP Procedural Framework
+#
+# Copyright 2024-2026 Danny Mbanginu
+#
+# Licensed under the Apache License, Version 2.0.
+# See the LICENSE file for details.
+#
+
+# PHP
+/vendor/
+/composer.lock
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# System files
+/.env
+/.env.*
+!.env.example
+/app/.env
+/app/.env.*
+!/app/.env.example
+
+# Logs and cache
+/logs/
+/tmp/
+/cache/
+/cache/*
+!/cache/.gitkeep
+/sessions/
+/app/logs/
+/app/tmp/
+/app/cache/
+/app/cache/*
+!/app/cache/.gitkeep
+/app/sessions/
+
+# Uploads (if stored in webroot during dev)
+/uploads/
+/assets/uploads/
+
+# OPcache (if file‐based)
+opcache*.bin
+
+# PHPUnit / test results
+/phpunit.xml
+/phpunit.xml.dist
+/tests/_output/
+
+# Node.js / frontend (if any)
+/node_modules/
+/dist/
+/build/
+
+# Others
+/RESOURCES/

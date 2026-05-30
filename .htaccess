@@ -1,0 +1,146 @@
+######################################################################
+#
+# NoClass™ PHP Procedural Framework
+#
+# Copyright 2024-2026 Danny Mbanginu
+#
+# Licensed under the Apache License, Version 2.0.
+# See the LICENSE file for details.
+#
+# Recommended .htaccess (Apache)
+# Place this file in your PUBLIC web root:
+#   - Option 1 (Recommended): public_html/ (or /public)
+#   - Option 2: public_html/
+#   - Legacy: project root (NOT recommended)
+#
+# Notes:
+# - Keep "Option 1" rules active by default.
+# - For Option 2 or Legacy, uncomment the relevant block.
+######################################################################
+
+# ---------------------------------------------------------------
+# 0) Core hardening (SAFE DEFAULTS)
+# ---------------------------------------------------------------
+
+# Disable directory listing
+Options -Indexes
+
+# Block access to hidden files (e.g. .env, .git, .htaccess)
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+# Block common sensitive file types (adjust if you truly need public json/yaml)
+<FilesMatch "\.(env|ini|log|sql|bak|old|swp|dist)$">
+  Require all denied
+</FilesMatch>
+
+# ---------------------------------------------------------------
+# 1) Front Controller Routing (RECOMMENDED)
+#    Sends all non-file/non-folder requests to index.php
+# ---------------------------------------------------------------
+RewriteEngine On
+
+# If the request is a real file or directory, serve it directly
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Otherwise, route to NoClass
+RewriteRule ^(.*)$ index.php?url=$1 [QSA,L]
+
+
+######################################################################
+# OPTION 1 (RECOMMENDED) - App OUTSIDE web root
+#
+# Layout:
+#   /home/user/noclass_app/   (private)
+#   /home/user/public_html/   (public: index.php + assets)
+#
+# You do NOT need folder deny rules here because private folders
+# are physically outside the web root.
+#
+# Keep the blocks below commented unless you are using Option 2/Legacy.
+######################################################################
+
+
+######################################################################
+# OPTION 2 - App INSIDE web root under /app (Shared hosting friendly)
+#
+# Layout:
+#   public_html/
+#     index.php
+#     assets/
+#     app/ (private app folders)
+#
+# IMPORTANT: You MUST block /app.
+# Uncomment this block if you use Option 2.
+######################################################################
+RewriteRule ^app(/|$) - [F,L]
+
+
+######################################################################
+# LEGACY MODE (NOT RECOMMENDED) - Private folders in web root
+#
+# Layout:
+#   webroot/
+#     index.php
+#     system/
+#     config/
+#     controllers/
+#     models/
+#     modules/
+#     middlewares/
+#     views/
+#     lib/
+#     vendor/
+#
+# IMPORTANT: You MUST block these folders.
+# Uncomment this block ONLY if you are running legacy mode.
+######################################################################
+#RedirectMatch 403 ^/(system|config|controllers|models|views|lib|vendor|middleware|modules|storage)(/|$)
+
+
+######################################################################
+# OPTIONAL: Uploads hardening
+#
+# If you have a public uploads folder (e.g. /assets/uploads),
+# you should prevent PHP execution inside it.
+#
+# Best practice: store uploads OUTSIDE web root and serve via PHP.
+#
+# If you must keep them public, create a separate .htaccess inside:
+#   assets/uploads/.htaccess
+# with:
+#   Options -Indexes
+#   php_flag engine off
+#   AddType text/plain .php .phtml .php5 .php7
+######################################################################
+
+
+######################################################################
+# OPTIONAL: Force HTTPS (uncomment if SSL is enabled)
+######################################################################
+#RewriteCond %{HTTPS} !=on
+#RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+
+######################################################################
+# OPTIONAL: Caching for static assets (safe defaults)
+######################################################################
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/css "access plus 30 days"
+  ExpiresByType application/javascript "access plus 30 days"
+  ExpiresByType image/png "access plus 30 days"
+  ExpiresByType image/jpeg "access plus 30 days"
+  ExpiresByType image/gif "access plus 30 days"
+  ExpiresByType image/svg+xml "access plus 30 days"
+  ExpiresByType font/woff2 "access plus 30 days"
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(css|js|png|jpg|jpeg|gif|svg|woff2)$">
+    Header set Cache-Control "public, max-age=2592000"
+  </FilesMatch>
+</IfModule>
