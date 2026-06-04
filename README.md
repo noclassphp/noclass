@@ -1,4 +1,4 @@
-# NoClass™ PHP Procedural Framework
+# NoClass™ PHP Procedural MVC Framework
 
 NoClass is an open-source procedural PHP MVC framework designed for developers who want structure without user-defined classes.
 
