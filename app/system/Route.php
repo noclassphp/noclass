@@ -500,7 +500,6 @@ function route() {
 
     // Expanded to handle arguments in middlewares
     if (!run_middlewares($middlewares ?? [], $module)) {
-        var_dump($middlewares);
         return;
     }
     // continue to controller/action
