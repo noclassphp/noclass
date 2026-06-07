@@ -414,7 +414,40 @@ function has_scheme(string $url): bool
  */
 function base_url(string $path = ''): string
 {
-    $base = trim((string) env('BASE_URL', ''), '/');
+    $configured = trim((string)env('BASE_URL', ''), '/');
+
+    if ($configured === '') {
+        $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $origin = (is_https() ? 'https://' : 'http://') . $host;
+    } else {
+        if (!has_scheme($configured)) {
+            $configured = (is_https() ? 'https://' : 'http://') . $configured;
+        }
+        // Extract origin (scheme + host + optional port) only.
+        // Strip any path component so BASE_URI is not doubled when
+        // developers set BASE_URL=http://localhost/myapp.
+        $parsed = parse_url($configured);
+        $origin = ($parsed['scheme'] ?? 'http') . '://' . ($parsed['host'] ?? 'localhost');
+        if (!empty($parsed['port'])) {
+            $origin .= ':' . $parsed['port'];
+        }
+    }
+
+    $origin = rtrim($origin, '/');
+    $path   = trim($path, '/');
+
+    return $path === '' ? $origin : $origin . '/' . $path;
+}
+
+/**
+ * base_url_full() — absolute URL using the complete BASE_URL value including
+ * any configured path component. Use this for external references, API
+ * callbacks, or any URL that must exactly match what BASE_URL is set to.
+ * Do NOT use for internal app links — use url() instead.
+ */
+function base_url_full(string $path = ''): string
+{
+    $base = trim((string)env('BASE_URL', ''), '/');
 
     if ($base === '') {
         $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
@@ -422,8 +455,7 @@ function base_url(string $path = ''): string
     }
 
     if (!has_scheme($base)) {
-        $scheme = is_https() ? 'https://' : 'http://';
-        $base = $scheme . $base;
+        $base = (is_https() ? 'https://' : 'http://') . $base;
     }
 
     $base = rtrim($base, '/');
@@ -431,7 +463,6 @@ function base_url(string $path = ''): string
 
     return $path === '' ? $base : $base . '/' . $path;
 }
-
 
 /**
  * url() — internal app URL, correctly prepends BASE_URI for subfolder deploys.
@@ -447,12 +478,18 @@ function base_url(string $path = ''): string
  */
 function url(string $path = ''): string
 {
-    $path = trim($path, '/');
+    // Preserve query string — split path from query before processing
+    $query = '';
+    if (strpos($path, '?') !== false) {
+        [$path, $query] = explode('?', $path, 2);
+    }
+
+    $path    = trim($path, '/');
     $baseUri = defined('BASE_URI') ? trim(BASE_URI, '/') : '';
+    $full    = trim($baseUri . '/' . $path, '/');
+    $result  = base_url($full);
 
-    $fullPath = trim($baseUri . '/' . $path, '/');
-
-    return base_url($fullPath);
+    return $query !== '' ? $result . '?' . $query : $result;
 }
 
 /**
