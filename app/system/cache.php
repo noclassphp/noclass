@@ -102,9 +102,6 @@ function cache_call(string $op, array $args = [])
         $GLOBALS['__noclass_cache_driver'] = 'NONE';
         $fn = "cache_none_{$op}";
     }
-//echo $fn.'</br>';
-
-error_log('[CACHE OUT] ' . json_encode($args));
     if (!function_exists($fn)) return null;
 
     return $fn(...$args);
