@@ -9,95 +9,42 @@
  * See the LICENSE file for details.
  */
 
-function secure_session_start()
+function secure_session_start(): void
 {
-    // Only start once
     if (session_status() === PHP_SESSION_ACTIVE) return;
 
-    $secure = is_https();
-
-    // Use Lax by default for login flows; switch to Strict if you really want it.
-    // Browsers require Secure cookies when SameSite=None.
+    $secure   = is_https();
     $sameSite = defined('SESSION_SAMESITE') ? SESSION_SAMESITE : 'Lax';
     $sameSite = in_array($sameSite, ['Lax', 'Strict', 'None'], true) ? $sameSite : 'Lax';
 
-    if ($sameSite === 'None' && !$secure) {
-        $sameSite = 'Lax';
-    }
+    // Browsers require Secure=true when SameSite=None
+    if ($sameSite === 'None' && !$secure) $sameSite = 'Lax';
 
     session_start([
         'cookie_lifetime' => 0,
-        'cookie_secure'   => $secure,  // ✅ works on localhost http + production https
+        'cookie_secure'   => $secure,
         'cookie_httponly' => true,
         'cookie_samesite' => $sameSite,
         'use_strict_mode' => 1,
     ]);
 
-    // Regenerate once to prevent fixation
+    // Regenerate once to prevent session fixation
     if (!isset($_SESSION['initiated'])) {
         session_regenerate_id(true);
         $_SESSION['initiated'] = true;
     }
 }
 
-function is_https()
+function is_https(): bool
 {
     if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') return true;
     if (!empty($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443) return true;
-    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') return true;
+    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
+        strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') return true;
     return false;
 }
 
-function sanitizeInput($input) {
-    // Add your sanitation logic here
-    return htmlspecialchars($input, ENT_QUOTES, 'UTF-8');
-}
-
-function validateEmail($email) {
-    return filter_var($email, FILTER_VALIDATE_EMAIL);
-}
-
-function sanitizeForSQL($mysqli, $input) {
-    return mysqli_real_escape_string($mysqli, $input);
-}
-
-function hashPassword($password) {
-    // Add your password hashing logic here
-    return password_hash($password, PASSWORD_DEFAULT);
-}
-
-function verifyPassword($password, $hash) {
-    // Add your password verification logic here
-    return password_verify($password, $hash);
-}
-
-/*function encode($password)
-{
-    // Encoding logic
-    // Implement your encoding code here
-    echo "Encoding password: $password";
-}
-
-function decode($password)
-{
-    // Decoding logic
-    // Implement your decoding code here
-    echo "Decoding password: $password";
-}
-
-function security_encode($password)
-{
-    // Encoding logic
-    // Implement your encoding code here
-    echo "Encoding password: $password";
-}
-
-function security_decode($password)
-{
-    // Decoding logic
-    // Implement your decoding code here
-    echo "Decoding password: $password";
-}*/
+// ── Password helpers ──────────────────────────────────────────────────────────
 
 function security_hash_password(string $password): string
 {
@@ -109,49 +56,46 @@ function security_verify_password(string $password, string $hash): bool
     return password_verify($password, $hash);
 }
 
-// 6. CSRF Protection
-// Updated CSRF protection implementation
-/*function validateCsrfToken()
+// Alias shorthands
+function hashPassword(string $password): string  { return security_hash_password($password); }
+function verifyPassword(string $password, string $hash): bool { return security_verify_password($password, $hash); }
+
+// ── Input sanitization helpers ────────────────────────────────────────────────
+
+function sanitizeInput($input): string
 {
-    // Check if CSRF token exists in the request
-    if (!isset($_POST['csrf_token'])) {
-        return false;
-    }
+    return htmlspecialchars((string)$input, ENT_QUOTES, 'UTF-8');
+}
 
-    $csrfToken = $_POST['csrf_token'];
+function validateEmail(string $email): bool
+{
+    return filter_var($email, FILTER_VALIDATE_EMAIL) !== false;
+}
 
-    // Validate the CSRF token against the token stored in the session
-    if (isset($_SESSION['csrf_token']) && $csrfToken === $_SESSION['csrf_token']) {
-        // Check if token has expired
-        if (isset($_SESSION['csrf_token_expiry']) && $_SESSION['csrf_token_expiry'] >= time()) {
-            // CSRF token is valid and not expired, proceed with the request
+function sanitizeForSQL($mysqli, string $input): string
+{
+    return mysqli_real_escape_string($mysqli, $input);
+}
 
-            // Refresh CSRF token for the next request
-            generateCsrfToken();
+function validateUploadedFile(array $file): bool
+{
+    $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    $finfo   = new finfo(FILEINFO_MIME_TYPE);
+    return in_array($finfo->file($file['tmp_name']), $allowed, true);
+}
 
-            return true;
-        }
-    }
+// ── CSRF ──────────────────────────────────────────────────────────────────────
 
-    // Invalid CSRF token
-    return false;
-}*/
-
-// ---------------- CSRF ----------------
-
-function csrf_token(int $ttlSeconds = 900)
+function csrf_token(int $ttlSeconds = 900): string
 {
     if (session_status() !== PHP_SESSION_ACTIVE) secure_session_start();
 
     $now = time();
 
-    // If missing/expired, generate new
-    if (
-        empty($_SESSION['csrf_token']) ||
+    if (empty($_SESSION['csrf_token']) ||
         empty($_SESSION['csrf_token_expiry']) ||
-        $_SESSION['csrf_token_expiry'] < $now
-    ) {
-        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+        $_SESSION['csrf_token_expiry'] < $now) {
+        $_SESSION['csrf_token']        = bin2hex(random_bytes(32));
         $_SESSION['csrf_token_expiry'] = $now + $ttlSeconds;
     }
 
@@ -160,119 +104,151 @@ function csrf_token(int $ttlSeconds = 900)
 
 function csrf_field(): string
 {
-    $t = csrf_token();
-    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars($t, ENT_QUOTES, 'UTF-8') . '">' . "\n";
+    return '<input type="hidden" name="csrf_token" value="'
+        . htmlspecialchars(csrf_token(), ENT_QUOTES, 'UTF-8')
+        . '">' . "\n";
 }
 
-function csrf_verify(string $tokenFromRequest)
+/**
+ * csrf_verify() — verify the CSRF token.
+ *
+ * Fix: original required the caller to pass the token explicitly.
+ * Now extracts automatically from $_POST or X-CSRF-TOKEN header
+ * when called with no argument. Callers can still pass a token
+ * explicitly if needed.
+ */
+function csrf_verify(string $tokenFromRequest = ''): bool
 {
     if (session_status() !== PHP_SESSION_ACTIVE) secure_session_start();
 
-    if (empty($tokenFromRequest)) return false;
-    if (empty($_SESSION['csrf_token']) || empty($_SESSION['csrf_token_expiry'])) return false;
-    if ($_SESSION['csrf_token_expiry'] < time()) return false;
+    // Auto-extract when not passed explicitly
+    if ($tokenFromRequest === '') {
+        $tokenFromRequest = $_POST['csrf_token']
+            ?? $_SERVER['HTTP_X_CSRF_TOKEN']
+            ?? '';
+    }
+
+    if (empty($tokenFromRequest))                   return false;
+    if (empty($_SESSION['csrf_token']))              return false;
+    if (empty($_SESSION['csrf_token_expiry']))       return false;
+    if ($_SESSION['csrf_token_expiry'] < time())     return false;
 
     $ok = hash_equals($_SESSION['csrf_token'], $tokenFromRequest);
 
-    // Rotate token after successful verification (good practice)
+    // Rotate after successful verification and send new token in response header
+    // so JavaScript clients (noclass.js) can update their stored token without
+    // a page reload. Without this, every second AJAX request fails after rotation.
     if ($ok) {
         unset($_SESSION['csrf_token'], $_SESSION['csrf_token_expiry']);
-        csrf_token(); // generate fresh
+        $newToken = csrf_token(); // seed fresh token immediately
+        if (!headers_sent()) {
+            header('X-CSRF-Token: ' . $newToken);
+        }
     }
 
     return $ok;
 }
 
-
-/*function validateCsrfToken($token) {
-    return isset($_SESSION['csrf_token']) &&
-           $_SESSION['csrf_token'] === $token &&
-           $_SESSION['csrf_token_expiry'] >= time();
-}
-
-
-// Generate a new CSRF token and store it in the session
-function generateCsrfToken()
-{
-    // Generate a random token
-    $csrfToken = bin2hex(random_bytes(32));
-
-    // Set the token in the session
-    $_SESSION['csrf_token'] = $csrfToken;
-
-    // Set the token expiration time (e.g., 15 minutes from now)
-    $_SESSION['csrf_token_expiry'] = time() + (15 * 60); // 15 minutes
-}*/
-
-
-/**
- * Send common HTTP security headers.
- */
-function send_security_headers(): void
-{
-    if (headers_sent()) {
-        return;
-    }
-
-    if (is_https()) {
-        header(
-            'Strict-Transport-Security: max-age=31536000; includeSubDomains; preload'
-        );
-    }
-
-    header('X-Frame-Options: DENY');
-    header('X-Content-Type-Options: nosniff');
-    header('Referrer-Policy: strict-origin-when-cross-origin');
-    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-}
-
-function validateUploadedFile($file) {
-    $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/gif'];
-    $finfo = new finfo(FILEINFO_MIME_TYPE);
-    $fileMimeType = $finfo->file($file['tmp_name']);
-
-    if (in_array($fileMimeType, $allowedMimeTypes)) {
-        return true;
-    }
-    return false;
-}
+// ── CSP ───────────────────────────────────────────────────────────────────────
 
 function csp_nonce(): string
 {
     if (!defined('CSP_NONCE')) {
         define('CSP_NONCE', bin2hex(random_bytes(16)));
     }
-
     return CSP_NONCE;
 }
 
 /**
- * Generate and send the Content Security Policy header.
+ * generate_csp_header() — emit a Content-Security-Policy header.
  *
- * Uses a per-request nonce to allow inline scripts/styles
- * generated by NoClass while blocking unauthorized content.
+ * Directives are extensible via constants in config/config.php:
+ *
+ *   define('CSP_EXTRA_SCRIPT_SRC',  "'unsafe-eval'");
+ *   define('CSP_EXTRA_STYLE_SRC',   'https://fonts.googleapis.com');
+ *   define('CSP_EXTRA_FONT_SRC',    'https://fonts.gstatic.com');
+ *   define('CSP_EXTRA_IMG_SRC',     'https://cdn.example.com');
+ *   define('CSP_EXTRA_CONNECT_SRC', 'https://api.example.com');
+ *   define('CSP_REPORT_URI',        '/csp-report');
+ *   define('CSP_REPORT_ONLY',       true);   // use Report-Only mode for rollout
  */
 function generate_csp_header(): void
 {
-    if (headers_sent()) {
-        return;
-    }
+    if (headers_sent()) return;
 
     $nonce = csp_nonce();
 
-    $csp = [
+    $script_src = "'self' 'nonce-{$nonce}'";
+    if (defined('CSP_EXTRA_SCRIPT_SRC') && CSP_EXTRA_SCRIPT_SRC) {
+        $script_src .= ' ' . CSP_EXTRA_SCRIPT_SRC;
+    }
+
+    $style_src = "'self' 'nonce-{$nonce}'";
+    if (defined('CSP_EXTRA_STYLE_SRC') && CSP_EXTRA_STYLE_SRC) {
+        $style_src .= ' ' . CSP_EXTRA_STYLE_SRC;
+    }
+
+    $font_src = "'self' data:";
+    if (defined('CSP_EXTRA_FONT_SRC') && CSP_EXTRA_FONT_SRC) {
+        $font_src .= ' ' . CSP_EXTRA_FONT_SRC;
+    }
+
+    $img_src = "'self' data: https:";
+    if (defined('CSP_EXTRA_IMG_SRC') && CSP_EXTRA_IMG_SRC) {
+        $img_src .= ' ' . CSP_EXTRA_IMG_SRC;
+    }
+
+    $connect_src = "'self'";
+    if (defined('CSP_EXTRA_CONNECT_SRC') && CSP_EXTRA_CONNECT_SRC) {
+        $connect_src .= ' ' . CSP_EXTRA_CONNECT_SRC;
+    }
+
+    $directives = [
         "default-src 'self'",
         "base-uri 'self'",
         "object-src 'none'",
         "frame-ancestors 'none'",
         "form-action 'self'",
-        "img-src 'self' data: https:",
-        "font-src 'self' data: https:",
-        "connect-src 'self'",
-        "script-src 'self' 'nonce-{$nonce}'",
-        "style-src 'self' 'nonce-{$nonce}'",
+        "script-src {$script_src}",
+        "style-src {$style_src}",
+        "img-src {$img_src}",
+        "font-src {$font_src}",
+        "connect-src {$connect_src}",
     ];
 
-    header('Content-Security-Policy: ' . implode('; ', $csp), true);
+    if (defined('CSP_REPORT_URI') && CSP_REPORT_URI) {
+        $directives[] = 'report-uri ' . CSP_REPORT_URI;
+    }
+
+    $headerName = (defined('CSP_REPORT_ONLY') && CSP_REPORT_ONLY)
+        ? 'Content-Security-Policy-Report-Only'
+        : 'Content-Security-Policy';
+
+    header($headerName . ': ' . implode('; ', $directives), true);
 }
 
+/**
+ * send_security_headers() — emit common hardening headers.
+ *
+ * CSP is opt-in via USE_CSP in config/config.php.
+ * Fix: original called generate_csp_header() unconditionally here
+ * (via setup.php) which broke any project with inline styles/scripts.
+ */
+function send_security_headers(): void
+{
+    if (headers_sent()) return;
+
+    if (is_https()) {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains; preload');
+    }
+
+    header('X-Frame-Options: DENY');
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+    header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
+
+    // Opt-in CSP
+    if (defined('USE_CSP') && USE_CSP) {
+        generate_csp_header();
+    }
+}
