@@ -13,85 +13,92 @@
  * Load module routes config (modules/<module>/config/routes.php) with the same caching strategy as root routes.
  * Returns an array in the same format as config/routes.php.
  */
-declare(strict_types=1);
-
-function load_module_routes(string $module): array
-{
-    $module = trim($module);
-    if ($module === '') {
-        return [];
-    }
-
-    $cfg = base_path('modules/' . $module . '/config/routes.php');
-    if (!file_exists($cfg)) {
-        return [];
-    }
-
-    static $cache = [];
-    $mtime  = filemtime($cfg) ?: 0;
-    $mapKey = "routes.module.{$module}.{$mtime}";
-
-    // in-process cache
-    if (isset($cache[$mapKey])) {
-        return $cache[$mapKey];
-    }
-
-    $mapJson = (CACHING === CACHE_ENGINE)
-        ? cache_get_versioned($mapKey)
-        : (CACHING === CACHE_FILE ? fileCacheLoad($mapKey) : null);
-
-    if ($mapJson !== null) {
-        $routes = json_decode($mapJson, true);
-        if (is_array($routes)) {
-            $cache[$mapKey] = $routes;
-            return $routes;
+// load_module_routes() — guarded to avoid redeclaration when modules.php
+// is loaded before Route.php (which it is, via setup.php).
+// If modules.php has already defined it, that version is used — it delegates
+// to module_config() and checks module_is_active() correctly.
+    function load_module_routes(string $module): array
+    {
+        $module = trim($module);
+        if ($module === '') {
+            return [];
         }
-    }
 
-    $routes = include $cfg;
-    if (!is_array($routes)) {
-        $routes = [];
-    }
+        $cfg = base_path('modules/' . $module . '/config/routes.php');
+        if (!file_exists($cfg)) {
+            return [];
+        }
 
-    $mapJson = json_encode($routes);
-    if (CACHING === CACHE_ENGINE) {
-        cache_set_versioned($mapKey, $mapJson, 0);
-    } elseif (CACHING === CACHE_FILE) {
-        fileCacheSave($mapKey, $mapJson, 0);
-    }
+        static $cache = [];
+        $mtime  = filemtime($cfg) ?: 0;
+        $mapKey = "routes.module.{$module}.{$mtime}";
 
-    $cache[$mapKey] = $routes;
-    return $routes;
-}
+        // in-process cache
+        if (isset($cache[$mapKey])) {
+            return $cache[$mapKey];
+        }
+
+        $mapJson = (CACHING === CACHE_ENGINE)
+            ? cache_get_versioned($mapKey)
+            : (CACHING === CACHE_FILE ? fileCacheLoad($mapKey) : null);
+
+        if ($mapJson !== null) {
+            $routes = json_decode($mapJson, true);
+            if (is_array($routes)) {
+                $cache[$mapKey] = $routes;
+                return $routes;
+            }
+        }
+
+        $routes = include $cfg;
+        if (!is_array($routes)) {
+            $routes = [];
+        }
+
+        $mapJson = json_encode($routes);
+        if (CACHING === CACHE_ENGINE) {
+            cache_set_versioned($mapKey, $mapJson, 0);
+        } elseif (CACHING === CACHE_FILE) {
+            fileCacheSave($mapKey, $mapJson, 0);
+        }
+
+        $cache[$mapKey] = $routes;
+        return $routes;
+    }
 
 /**
  * Optional module allowlist.
  * If config/modules.php exists, only modules explicitly enabled (truthy) are allowed.
  * If it doesn't exist, all modules are allowed (backward compatible).
  */
-function is_module_enabled(string $module): bool
-{
-    $module = trim($module);
-    if ($module === '') return false;
+// is_module_enabled() — guarded to avoid redeclaration when modules.php
+// is loaded before Route.php. modules.php provides the fuller version that
+// delegates to module_is_active() and supports both registry formats
+// (map and list). If already defined, that version takes precedence.
+    function is_module_enabled(string $module): bool
+    {
+        $module = trim($module);
+        if ($module === '') return false;
 
-    $cfg = base_path('config/modules.php');
-    if (!file_exists($cfg)) {
-        return true; // no allowlist configured
+        $cfg = base_path('config/modules.php');
+        if (!file_exists($cfg)) {
+            return true; // no allowlist configured
+        }
+
+        static $enabled = null;
+        if ($enabled === null) {
+            $tmp = include $cfg;
+            $enabled = is_array($tmp) ? $tmp : [];
+        }
+
+        // If present in map, obey it; if not present, treat as disabled
+        // (secure-by-default when allowlist exists)
+        if (array_key_exists($module, $enabled)) {
+            return (bool)$enabled[$module];
+        }
+
+        return false;
     }
-
-    static $enabled = null;
-    if ($enabled === null) {
-        $tmp = include $cfg;
-        $enabled = is_array($tmp) ? $tmp : [];
-    }
-
-    // If present in map, obey it; if not present, treat as disabled (secure-by-default when allowlist exists)
-    if (array_key_exists($module, $enabled)) {
-        return (bool)$enabled[$module];
-    }
-
-    return false;
-}
 
 /**
  * Resolve middleware file path (supports module middleware + app middleware).
@@ -120,8 +127,22 @@ function resolve_middleware_file(string $name, string $module = null): string
 
 function route() {
     // 1. Read and normalize the URL
-    $requestUrl = isset($_GET['url']) ? trim($_GET['url'], "/") : '';
-    $segments   = $requestUrl === '' ? [] : explode('/', $requestUrl);
+    $requestUrl = isset($_GET['url']) ? trim($_GET['url'], '/') : '';
+
+    // Fix: strip BASE_URI prefix for subfolder deployments.
+    // When Apache rewrites /forgehub/login to index.php?url=forgehub/login,
+    // $_GET['url'] contains the subfolder prefix. Without this strip,
+    // $segments[0] becomes 'forgehub' instead of 'login' and all routes 404.
+    if (defined('BASE_URI') && BASE_URI !== '') {
+        $baseUriStrip = trim(BASE_URI, '/');
+        if ($baseUriStrip !== '' && strpos($requestUrl, $baseUriStrip . '/') === 0) {
+            $requestUrl = substr($requestUrl, strlen($baseUriStrip) + 1);
+        } elseif ($requestUrl === $baseUriStrip) {
+            $requestUrl = '';
+        }
+    }
+
+    $segments = $requestUrl === '' ? [] : explode('/', $requestUrl);
 
      // ──────────────── Load & cache the routes map ────────────────
     static $routes = null;
@@ -174,6 +195,14 @@ function route() {
 
         // Include controller and middleware, then call action
         $module = $dispatch['module'] ?? null;
+
+        // ── Restore route layout from cached dispatch ──────────────────────
+        $GLOBALS['_noclass_route_layout'] = $dispatch['layout'] ?? null;
+
+        // Reset per-request view state for cached path too
+        if (function_exists('_noclass_reset_view_state')) {
+            _noclass_reset_view_state();
+        }
 
         // 1) Include controller file (module-aware)
         if (!empty($dispatch['controller_file']) && file_exists($dispatch['controller_file'])) {
@@ -368,8 +397,10 @@ function route() {
 
     $validKeys = array_keys($activeRoutes);
 
-    // 3. Determine controller key (first segment or default 'home')
-    $key = $segmentsForMatch[0] ?? 'home';
+    // 3. Determine controller key (first segment or default from DEFAULT_CONTROLLER)
+    // Fix: original hardcoded 'home' — now reads DEFAULT_CONTROLLER constant.
+    $defaultKey = defined('DEFAULT_CONTROLLER') ? strtolower(DEFAULT_CONTROLLER) : 'home';
+    $key = $segmentsForMatch[0] ?? $defaultKey;
 
     // 4. Reject any segment with '.' or '/'
     if (strpos($key, '.') !== false || strpos($key, '/') !== false) {
@@ -401,8 +432,23 @@ function route() {
     }
 
     //$actions  = (array)$routeConfig['action'] ?? [];
-    $actions    = $routeConfig['action']     ?? [];
+    $actions     = $routeConfig['action']     ?? [];
     $middlewares = $routeConfig['middleware'] ?? [];
+
+    // ── Layout declaration ────────────────────────────────────────────────────
+    // Read 'layout' from route config.
+    //   null          = key absent  → resolution falls through to DEFAULT_LAYOUT / main.php convention
+    //   false         = key present as false → suppress layout for this route
+    //   'name'        = key present as string → use named layout
+    // Stored in globals so render_route_view() can read it after dispatch.
+    $routeLayout = array_key_exists('layout', $routeConfig) ? $routeConfig['layout'] : null;
+    $GLOBALS['_noclass_route_layout'] = $routeLayout;
+
+    // Reset per-request layout/section state (sections, view_content, view-level overrides).
+    // Called here so state is clean for every dispatched request, including cached paths.
+    if (function_exists('_noclass_reset_view_state')) {
+        _noclass_reset_view_state();
+    }
 
 
 
@@ -606,13 +652,14 @@ function route() {
 
     // ───── Cache the dispatch result ─────
     $dispatch = [
-        'module'      => $module,
-        'controller'  => $controllerName,
+        'module'          => $module,
+        'controller'      => $controllerName,
         'controller_file' => $controllerFileForCache,
-        'action'      => $actionName,
-        'params'      => $params,
-        'middleware'  => $middlewares,
-        'actionNames' => $actionNames,
+        'action'          => $actionName,
+        'params'          => $params,
+        'middleware'       => $middlewares,
+        'actionNames'     => $actionNames,
+        'layout'          => $routeLayout,   // persisted so cached dispatch can restore it
     ];
     $ser = json_encode($dispatch);
     switch (CACHING) {
@@ -839,7 +886,8 @@ function matchAction222(array $actions, array $segments)
                         $ok = ctype_alnum($seg);
                         break;
                     case 'slug':
-                        $ok = ctype_alnum(str_replace('-', '', $seg));
+                        $ok = ($seg !== '' && $seg[0] !== '-' && $seg[strlen($seg)-1] !== '-')
+                              && ctype_alnum(str_replace('-', '', $seg));
                         break;
                     case 'email':
                         $ok = filter_var($seg, FILTER_VALIDATE_EMAIL) !== false;
@@ -1017,8 +1065,12 @@ function validateDynamicSegment(string $segment, string $type): bool
         case 'alnum':
             return ctype_alnum($segment);
         case 'slug':
-            //return preg_match('/^[a-zA-Z0-9\-]+$/', $segment) === 1;
-            return ctype_alnum(str_replace('-', '', $segment)) === 1;
+            // Allows lowercase/uppercase letters, digits and hyphens.
+            // Fix: ctype_alnum() returns bool, comparing bool === 1 always false.
+            if ($segment === '' || $segment[0] === '-' || $segment[strlen($segment)-1] === '-') {
+                return false;
+            }
+            return ctype_alnum(str_replace('-', '', $segment));
         case 'email':
             return filter_var($segment, FILTER_VALIDATE_EMAIL) !== false;
         case 'uuid':
@@ -1108,14 +1160,22 @@ function render_view(string $view, array $data = []): void
 /**
  * Internal router view renderer.
  *
- * This is used by route() when the controller action did not manually
- * render a view.
+ * Buffers the resolved view file, applies the layout system, then outputs.
  *
- * It tries:
- * 1. module view, if module route
- * 2. normal controller/action view
- * 3. plain content
- * 4. 404
+ * Layout resolution order:
+ *   1. layout_off() called in view          → no layout
+ *   2. layout('x') called in view           → named override
+ *   3. 'layout' => false in routes.php      → no layout for this route
+ *   4. 'layout' => 'x' in routes.php        → named route default
+ *   5. DEFAULT_LAYOUT constant              → named global default
+ *   6. views/layouts/main.php exists        → main convention
+ *   7. Nothing found                        → render bare
+ *
+ * For HMVC modules, layout and partial resolution checks the module-local
+ * path first, then falls back to the app-level path.
+ *
+ * Sections defined in the view via section()/end_section() are captured
+ * separately from $content and output via yield_section() in the layout.
  */
 function render_route_view(
     string $controllerName,
@@ -1125,103 +1185,111 @@ function render_route_view(
     string $module = null
 ): void {
 
+    // Already rendered manually via render_view() in the action
     if (!empty($GLOBALS['_noclass_view_rendered'])) {
         return;
     }
-    
-    $controllerName = trim(str_replace('\\', '/', $controllerName), "/ \t\n\r\0\x0B");
-    $actionName     = trim(str_replace('\\', '/', $actionName), "/ \t\n\r\0\x0B");
 
-    /*
-    |--------------------------------------------------------------------------
-    | If the controller action already returned content
-    |--------------------------------------------------------------------------
-    */
+    $controllerName = trim(str_replace('\\', '/', $controllerName), "/ \t\n\r\0\x0B");
+    $actionName     = trim(str_replace('\\', '/', $actionName),     "/ \t\n\r\0\x0B");
+
+    // ── If the action returned a string directly, echo and exit ──────────────
+    // Kept for backward compatibility with actions that return HTML strings.
+    // Returned content bypasses the layout system intentionally — the action
+    // took explicit ownership of the output.
     if ($content !== null && $content !== '') {
         echo $content;
         return;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Module route view
-    |--------------------------------------------------------------------------
-    |
-    | Example:
-    | modules/blog/views/index.php
-    |
-    */
+    // ── Resolve the view file ─────────────────────────────────────────────────
+    $viewFile = null;
+
     if ($module !== null && $module !== '') {
+        // Module view: modules/{module}/views/{Controller}/{action}.php
         $module = trim(str_replace('\\', '/', $module), "/ \t\n\r\0\x0B");
 
-        //$moduleViewKey = strtolower($module . '/views/' . $actionName);
-        $moduleViewKey = strtolower($module . '/views/' . $controllerName . '/' . $actionName);
-        $moduleViewFile = $GLOBALS['modules'][$moduleViewKey] ?? null;
+        $moduleViewKey  = strtolower($module . '/views/' . $controllerName . '/' . $actionName);
+        $viewFile       = $GLOBALS['modules'][$moduleViewKey] ?? null;
 
-        if (!$moduleViewFile || !is_file($moduleViewFile)) {
+        if (!$viewFile || !is_file($viewFile)) {
             $fallback = BASE_PATH . '/modules/' . $module . '/views/' . $actionName . '.php';
-
             if (is_file($fallback)) {
-                $moduleViewFile = $fallback;
+                $viewFile = $fallback;
             }
-        }
-
-        if ($moduleViewFile && is_file($moduleViewFile)) {
-            $globalData = $GLOBALS['_noclass_view_data'] ?? [];
-
-            if (is_array($globalData) && !empty($globalData)) {
-                extract($globalData, EXTR_SKIP);
-            }
-
-            require $moduleViewFile;
-            return;
         }
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Standard controller/action view
-    |--------------------------------------------------------------------------
-    |
-    | Example:
-    | controller: home
-    | action: index
-    | view: views/home/index.php
-    |
-    */
-    $view = strtolower($controllerName . '/' . $actionName);
-    $viewFile = $GLOBALS['views'][$view] ?? null;
+    if (!$viewFile) {
+        // Standard app view: views/{Controller}/{action}.php
+        $viewKey  = strtolower($controllerName . '/' . $actionName);
+        $viewFile = $GLOBALS['views'][$viewKey] ?? null;
+
+        if (!$viewFile || !is_file($viewFile)) {
+            $fallback = BASE_PATH . '/views/' . $controllerName . '/' . $actionName . '.php';
+            if (is_file($fallback)) {
+                $viewFile = $fallback;
+            }
+        }
+    }
 
     if (!$viewFile || !is_file($viewFile)) {
-        $fallback = BASE_PATH . '/views/' . $controllerName . '/' . $actionName . '.php';
-
-        if (is_file($fallback)) {
-            $viewFile = $fallback;
+        if (in_array($actionName, $declaredActions, true)) {
+            notFoundAction();
+        } else {
+            notFoundAction();
         }
-    }
-
-    if ($viewFile && is_file($viewFile)) {
-        $globalData = $GLOBALS['_noclass_view_data'] ?? [];
-
-        if (is_array($globalData) && !empty($globalData)) {
-            extract($globalData, EXTR_SKIP);
-        }
-
-        require $viewFile;
         return;
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Declared action exists but no view was found
-    |--------------------------------------------------------------------------
-    */
-    if (in_array($actionName, $declaredActions, true)) {
-        notFoundAction();
+    // ── Buffer the view ───────────────────────────────────────────────────────
+    // Always buffer so that:
+    //   a) layout() / layout_off() calls inside the view take effect before output
+    //   b) section() captures are extracted out of $content cleanly
+    //   c) layout wrapping happens after the complete view has run
+    $globalData = $GLOBALS['_noclass_view_data'] ?? [];
+
+    ob_start();
+
+    if (is_array($globalData) && !empty($globalData)) {
+        extract($globalData, EXTR_SKIP);
+    }
+
+    require $viewFile;
+
+    $viewOutput = ob_get_clean();
+
+    // ── Resolve layout ────────────────────────────────────────────────────────
+    // $GLOBALS['_noclass_route_layout'] was set by route() before dispatch.
+    // resolve_layout() is defined in system/view_helpers.php.
+    $routeLayout = $GLOBALS['_noclass_route_layout'] ?? null;
+
+    if (!function_exists('resolve_layout')) {
+        // view_helpers.php not loaded — render bare (graceful degradation)
+        echo $viewOutput;
         return;
     }
 
-    notFoundAction();
+    $layoutFile = resolve_layout($routeLayout, $module);
+
+    // ── No layout — output view directly ─────────────────────────────────────
+    if (!$layoutFile) {
+        echo $viewOutput;
+        return;
+    }
+
+    // ── Wrap in layout ────────────────────────────────────────────────────────
+    // Make the view output available to the layout in two ways:
+    //   $content        — direct variable (familiar, readable in layouts)
+    //   view_content()  — function call (explicit, avoids variable collision)
+    $GLOBALS['_noclass_view_content'] = $viewOutput;
+    $content = $viewOutput;
+
+    if (is_array($globalData) && !empty($globalData)) {
+        extract($globalData, EXTR_SKIP);
+    }
+
+    require $layoutFile;
 }
 
 
