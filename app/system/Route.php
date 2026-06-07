@@ -17,6 +17,7 @@
 // is loaded before Route.php (which it is, via setup.php).
 // If modules.php has already defined it, that version is used — it delegates
 // to module_config() and checks module_is_active() correctly.
+if (!function_exists('load_module_routes')) {
     function load_module_routes(string $module): array
     {
         $module = trim($module);
@@ -65,6 +66,7 @@
         $cache[$mapKey] = $routes;
         return $routes;
     }
+}
 
 /**
  * Optional module allowlist.
@@ -75,6 +77,7 @@
 // is loaded before Route.php. modules.php provides the fuller version that
 // delegates to module_is_active() and supports both registry formats
 // (map and list). If already defined, that version takes precedence.
+if (!function_exists('is_module_enabled')) {
     function is_module_enabled(string $module): bool
     {
         $module = trim($module);
@@ -99,6 +102,7 @@
 
         return false;
     }
+}
 
 /**
  * Resolve middleware file path (supports module middleware + app middleware).
