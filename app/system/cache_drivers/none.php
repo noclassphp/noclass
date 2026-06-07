@@ -82,7 +82,9 @@ function cache_none_set_stale(string $key, $value, int $ttl)
 
 function cache_none_lockrow(string $table, $id, string $clientId, int $lockTtl, int $timeout)
 {
-    return 0;
+    // No cache engine — no contention is possible, so the lock always succeeds.
+    // Returning 0 caused "Could not acquire lock" errors with CACHING=NONE.
+    return 1;
 }
 
 function cache_none_unlockrow(string $table, $id, string $clientId)
