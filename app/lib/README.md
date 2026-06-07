@@ -1,35 +1,58 @@
-# Libraries
+# `lib/` — Application Libraries
 
-NoClass™ PHP Procedural Framework  
-Copyright 2024-2026 Danny Mbanginu.
+Files in this folder are **lazy-loaded on demand** via the `lib()` function. Nothing here is loaded automatically at boot.
 
-Licensed under the Apache License, Version 2.0.  
-See the project `LICENSE` file for details.
+This is the correct place for feature-specific code that is only needed in certain controllers — payment SDKs, PDF generators, CSV exporters, email wrappers, API clients.
 
-## Purpose
+---
 
-This folder is for reusable procedural helper libraries used by the application.
-
-Examples may include:
-
-- Email helpers
-- Formatting helpers
-- Security helpers
-- Upload helpers
-- API helpers
-- Integration helpers
-
-## NoClass Style
-
-Application libraries should follow the NoClass™ procedural style.
-
-Recommended naming examples:
+## Loading a library
 
 ```php
-email_send();
-security_token();
-upload_validate();
-api_response();
+// In a controller or model:
+lib('stripe');          // loads lib/stripe.php
+lib('pdf_generator');   // loads lib/pdf_generator.php
+lib('csv_export');      // loads lib/csv_export.php
 ```
 
-Third-party libraries may still use classes where necessary, but NoClass™ application code should remain procedural unless there is a strong reason to do otherwise.
+`lib()` is idempotent — calling it twice for the same file has no effect.
+
+---
+
+## What belongs here
+
+- Third-party SDK wrappers (`stripe.php`, `mailchimp.php`)
+- Feature-specific helpers used in only a few controllers
+- Heavy utility classes or functions (PDF generation, image processing)
+- Any code where loading it on every request would be wasteful
+
+## What does NOT belong here
+
+- Functions needed everywhere without an explicit load call
+- Application-wide constants and helpers
+
+Those belong in `init/` and are loaded automatically at boot.
+
+---
+
+## Difference from `init/`
+
+| | `init/` | `lib/` |
+|---|---|---|
+| When loaded | Every request, at boot | On demand via `lib('name')` |
+| Who loads it | Framework (setup.php) | The controller that needs it |
+| Use case | Global helpers, constants | Feature-specific code |
+| OPcache benefit | Critical in production | Helpful but not load-bearing |
+
+---
+
+## Subdirectories
+
+`lib()` supports subdirectory paths:
+
+```php
+lib('payment/stripe');   // loads lib/payment/stripe.php
+lib('export/csv');       // loads lib/export/csv.php
+```
+
+This lets you organise larger lib collections without polluting the root of `lib/`.
