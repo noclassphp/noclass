@@ -225,6 +225,45 @@ function flash_all(): array
     return is_array($all) ? $all : [];
 }
 
+// ── Session helpers ───────────────────────────────────────────────────────────
+
+/**
+ * session() — read or write a single $_SESSION key.
+ *
+ * Mirrors the data() / flash() call style so all three helpers
+ * are consistent across the framework.
+ *
+ *   session('user_id')          get — returns value or null
+ *   session('user_id', 42)      set
+ *   session('user_id', null)    clear (unsets the key)
+ *   session()                   get all — returns full $_SESSION array
+ *
+ * Never replaces secure_session_start() — the session must already
+ * be started by the bootstrap before session() is called.
+ *
+ * Do NOT store sensitive data (passwords, tokens, raw credentials) in
+ * the session beyond what is necessary for authentication state.
+ */
+function session(string $key = null, $value = null)
+{
+    if ($key === null) {
+        return $_SESSION ?? [];
+    }
+
+    // Two arguments supplied → write (set or clear)
+    if (func_num_args() >= 2) {
+        if ($value === null) {
+            unset($_SESSION[$key]);
+        } else {
+            $_SESSION[$key] = $value;
+        }
+        return null;
+    }
+
+    // One argument → read
+    return $_SESSION[$key] ?? null;
+}
+
 // ── View override helpers ─────────────────────────────────────────────────────
 // Fix: originals stored state in $_SESSION causing bleed across requests.
 // Now use request-scoped $GLOBALS.
