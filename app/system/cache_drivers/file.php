@@ -172,7 +172,9 @@ function cache_file_set_stale(string $key, $value, int $ttl)
 // Locking (not implemented for file driver v1)
 function cache_file_lockrow(string $table, $id, string $clientId, int $lockTtl, int $timeout)
 {
-    return 0;
+    // File driver does not implement true row locking — no contention possible.
+    // Always succeed so db_update() can proceed.
+    return 1;
 }
 function cache_file_unlockrow(string $table, $id, string $clientId)
 {
