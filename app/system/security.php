@@ -39,8 +39,15 @@ function is_https(): bool
 {
     if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') return true;
     if (!empty($_SERVER['SERVER_PORT']) && (int)$_SERVER['SERVER_PORT'] === 443) return true;
-    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
+
+    // Only trust forwarded headers when behind a known proxy.
+    // Set TRUST_PROXY=true in config/config.php or .env when running behind
+    // a reverse proxy (nginx, Cloudflare, AWS ELB) that sets this header.
+    // Without this gate, any client can spoof X-Forwarded-Proto.
+    $trustProxy = defined('TRUST_PROXY') && TRUST_PROXY;
+    if ($trustProxy && !empty($_SERVER['HTTP_X_FORWARDED_PROTO']) &&
         strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') return true;
+
     return false;
 }
 
@@ -79,6 +86,16 @@ function sanitizeForSQL($mysqli, string $input): string
 
 function validateUploadedFile(array $file): bool
 {
+    // Verify the upload completed without errors
+    if (!isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) {
+        return false;
+    }
+
+    // Verify this is a genuine PHP upload (not a forged tmp_name path)
+    if (!isset($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
+        return false;
+    }
+
     $allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     $finfo   = new finfo(FILEINFO_MIME_TYPE);
     return in_array($finfo->file($file['tmp_name']), $allowed, true);

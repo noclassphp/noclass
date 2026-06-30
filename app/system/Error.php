@@ -351,7 +351,8 @@ function internalServerErrorAction(?string $text = null): void
  */
 function log404(string $message): void
 {
-    $url = $_SERVER['REQUEST_URI'] ?? 'unknown';
+    $url = str_replace(["\r", "\n"], '', $_SERVER['REQUEST_URI'] ?? 'unknown');
+    $message = str_replace(["\r", "\n"], '', $message);
     error_log("[NoClass][404] {$message} | URL: {$url}");
 }
 
@@ -361,8 +362,10 @@ function log404(string $message): void
 function logError(string $message, string $level = 'ERROR', array $context = []): void
 {
     $timestamp = date('Y-m-d H:i:s');
-    $url = $_SERVER['REQUEST_URI'] ?? 'unknown';
-    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $url = str_replace(["\r", "\n"], '', substr($_SERVER['REQUEST_URI'] ?? 'unknown', 0, 2048));
+    $ip  = str_replace(["\r", "\n"], '', $_SERVER['REMOTE_ADDR'] ?? 'unknown');
+    $message = str_replace(["\r", "\n"], '', $message);
+    $level   = str_replace(["\r", "\n"], '', $level);
 
     $logMessage = "[{$timestamp}] [{$level}] {$message} | URL: {$url} | IP: {$ip}";
 

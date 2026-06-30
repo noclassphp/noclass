@@ -182,6 +182,192 @@ function db_read():  mysqli { return db_connect('read');  }
 
 
 // =============================================================================
+// INTERNAL — SQL input validation helpers
+//
+// These validate structural (non-parameterizable) SQL fragments:
+// identifiers (table/column names), ORDER BY, LIMIT, and operators.
+// Values are always bound via prepared statements and need no validation here.
+//
+// Audit fix: prior versions interpolated these raw, allowing ORDER BY / LIMIT /
+// identifier injection when developers passed user input.
+// =============================================================================
+
+/**
+ * Validate a SQL identifier (table or column name).
+ * Allows: letters, digits, underscore, dot (for table.column), backtick-quoted.
+ * Rejects anything else (prevents injection via identifier position).
+ */
+function db_validate_identifier(string $name): string
+{
+    $name = trim($name);
+
+    // Allow * for SELECT *
+    if ($name === '*') return $name;
+
+    // Allow backtick-quoted identifiers (strip and re-quote)
+    if (strlen($name) >= 2 && $name[0] === '`' && $name[strlen($name) - 1] === '`') {
+        $inner = substr($name, 1, -1);
+        $inner = str_replace('`', '``', $inner);  // escape embedded backticks
+        return '`' . $inner . '`';
+    }
+
+    // Allow aggregate expressions like COUNT(*), SUM(`col`) that come from db_aggregate
+    if (preg_match('/^[A-Za-z_]+\(/', $name)) {
+        return $name;
+    }
+
+    // Plain identifier: letters, digits, underscore, dot, space (for aliases like "p.id AS pid")
+    if (!preg_match('/^[A-Za-z0-9_.*]+(\s+(AS|as)\s+[A-Za-z0-9_]+)?$/', $name)) {
+        throw new InvalidArgumentException(
+            'db: invalid identifier: ' . substr($name, 0, 80)
+        );
+    }
+
+    return $name;
+}
+
+/**
+ * Validate a column list (string or array) for SELECT.
+ * Each column is individually validated.
+ */
+function db_validate_cols($cols): string
+{
+    if ($cols === '*') return '*';
+
+    if (is_array($cols)) {
+        $validated = [];
+        foreach ($cols as $c) {
+            $validated[] = db_validate_identifier(trim((string)$c));
+        }
+        return implode(', ', $validated);
+    }
+
+    // String form: split on comma, validate each
+    $parts = explode(',', (string)$cols);
+    $validated = [];
+    foreach ($parts as $p) {
+        $validated[] = db_validate_identifier(trim($p));
+    }
+    return implode(', ', $validated);
+}
+
+/**
+ * Validate an ORDER BY clause.
+ * Accepts: "col ASC", "col DESC", "col1 ASC, col2 DESC", "table.col ASC".
+ * Rejects subqueries, CASE expressions, function calls, and anything
+ * that does not look like a comma-separated list of column + direction.
+ */
+function db_validate_order(string $order): string
+{
+    $order = trim($order);
+    if ($order === '') return '';
+
+    $parts = explode(',', $order);
+    $clean = [];
+
+    foreach ($parts as $part) {
+        $part = trim($part);
+        if ($part === '') continue;
+
+        // Match: identifier [ASC|DESC]
+        if (!preg_match('/^[A-Za-z0-9_.`]+(\s+(ASC|DESC|asc|desc))?$/', $part)) {
+            throw new InvalidArgumentException(
+                'db: invalid ORDER BY clause: ' . substr($part, 0, 80)
+            );
+        }
+
+        $clean[] = $part;
+    }
+
+    return implode(', ', $clean);
+}
+
+/**
+ * Validate a LIMIT clause.
+ * Accepts: "N", "N OFFSET M", "N, M" (MySQL shorthand).
+ * All components must be non-negative integers.
+ */
+function db_validate_limit(string $limit): string
+{
+    $limit = trim($limit);
+    if ($limit === '') return '';
+
+    // "N OFFSET M"
+    if (preg_match('/^(\d+)\s+OFFSET\s+(\d+)$/i', $limit, $m)) {
+        return (int)$m[1] . ' OFFSET ' . (int)$m[2];
+    }
+
+    // "N, M"  (MySQL shorthand: LIMIT offset, count)
+    if (preg_match('/^(\d+)\s*,\s*(\d+)$/', $limit, $m)) {
+        return (int)$m[1] . ', ' . (int)$m[2];
+    }
+
+    // Plain "N"
+    if (preg_match('/^\d+$/', $limit)) {
+        return (string)(int)$limit;
+    }
+
+    throw new InvalidArgumentException(
+        'db: invalid LIMIT clause: ' . substr($limit, 0, 80)
+    );
+}
+
+/**
+ * Validate a SQL comparison operator.
+ * Only allows the standard set used in WHERE conditions.
+ */
+function db_validate_operator(string $op): string
+{
+    $op = strtoupper(trim($op));
+    $allowed = ['=', '!=', '<>', '<', '>', '<=', '>=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'BETWEEN', 'IS', 'IS NOT'];
+    if (!in_array($op, $allowed, true)) {
+        throw new InvalidArgumentException(
+            'db: invalid operator: ' . substr($op, 0, 40)
+        );
+    }
+    return $op;
+}
+
+/**
+ * Validate a JOIN type.
+ */
+function db_validate_join_type(string $type): string
+{
+    $type = strtoupper(trim($type));
+    $allowed = ['INNER', 'LEFT', 'RIGHT', 'CROSS', 'LEFT OUTER', 'RIGHT OUTER'];
+    if (!in_array($type, $allowed, true)) {
+        throw new InvalidArgumentException(
+            'db: invalid JOIN type: ' . substr($type, 0, 40)
+        );
+    }
+    return $type;
+}
+
+/**
+ * Validate a JOIN ON clause.
+ * Allows: table.col = table.col [AND table.col = table.col ...]
+ * Rejects subqueries, function calls, anything non-identifier.
+ */
+function db_validate_join_on(string $on): string
+{
+    $on = trim($on);
+    if ($on === '') {
+        throw new InvalidArgumentException('db: empty JOIN ON clause');
+    }
+
+    // Allow only identifier = identifier patterns joined by AND/OR
+    // Pattern: col op col [AND col op col]*
+    if (!preg_match('/^[A-Za-z0-9_.`]+\s*[=<>!]+\s*[A-Za-z0-9_.`]+(\s+(AND|OR)\s+[A-Za-z0-9_.`]+\s*[=<>!]+\s*[A-Za-z0-9_.`]+)*$/i', $on)) {
+        throw new InvalidArgumentException(
+            'db: invalid JOIN ON clause: ' . substr($on, 0, 120)
+        );
+    }
+
+    return $on;
+}
+
+
+// =============================================================================
 // INTERNAL — db_raw()
 //
 // Every public function routes through here.
@@ -268,6 +454,7 @@ function db_raw_reject(string $sql, array $params, string $reason): void
 
 function log_security_event(string $type, array $data): void
 {
+    $type = str_replace(["\r", "\n"], '', $type);
     $base = defined('BASE_PATH') ? BASE_PATH : sys_get_temp_dir();
     $file = $base . '/storage/logs/security.log';
     $dir  = dirname($file);
@@ -508,6 +695,7 @@ function db_pluck(string $table, string $col, array $conds = [], string $order =
 function db_aggregate(string $table, string $func, string $col, array $conds = [], array $joins = [])
 {
     $func     = strtoupper(preg_replace('/[^A-Za-z_]/', '', $func));
+    $col      = db_validate_identifier($col);
     [$sql, $params] = db_build_select($table, "{$func}(`{$col}`) AS agg_value", $conds, '', '', $joins);
 
     $cacheKey = "agg.{$table}.{$func}.{$col}.v" . getVersion($table) . '.' . md5($sql . json_encode($params));
@@ -581,10 +769,18 @@ function db_search(
         return db_select($table, '*', $conds, $order, $limit, $joins);
     }
 
+    // Validate structural inputs
+    $table = db_validate_identifier($table);
+    $order = db_validate_order($order);
+    $limit = db_validate_limit($limit);
+
     $sql    = "SELECT * FROM `{$table}`";
     $params = [];
 
     foreach ($joins as [$type, $t, $on]) {
+        $type = db_validate_join_type($type);
+        $t    = db_validate_identifier($t);
+        $on   = db_validate_join_on($on);
         $sql .= " {$type} JOIN `{$t}` ON {$on}";
     }
 
@@ -593,10 +789,12 @@ function db_search(
     $pattern     = '%' . $term . '%';
 
     foreach ($conds as $colOp => $val) {
+        $colOp = db_validate_identifier((string)$colOp);
         $andClauses[] = "`{$colOp}` = ?";
         $params[]     = $val;
     }
     foreach ($searchCols as $col) {
+        $col = db_validate_identifier($col);
         $likeClauses[] = "`{$col}` LIKE ?";
         $params[]      = $pattern;
     }
@@ -609,8 +807,8 @@ function db_search(
         $sql .= ' WHERE ' . implode(' OR ', $likeClauses);
     }
 
-    if ($order) $sql .= " ORDER BY {$order}";
-    if ($limit) $sql .= " LIMIT {$limit}";
+    if ($order !== '') $sql .= " ORDER BY {$order}";
+    if ($limit !== '') $sql .= " LIMIT {$limit}";
 
     return db_fetch_all($sql, $params);
 }
@@ -623,7 +821,9 @@ function db_search(
 function db_insert(string $table, array $data): int
 {
     if (empty($data)) throw new InvalidArgumentException('db_insert: data array is empty');
+    $table = db_validate_identifier($table);
     $cols = array_keys($data);
+    foreach ($cols as $c) db_validate_identifier($c);
     $sql  = "INSERT INTO `{$table}` (`" . implode('`,`', $cols) . "`) VALUES ("
           . implode(',', array_fill(0, count($cols), '?')) . ")";
     db_raw($sql, ...array_values($data));
@@ -643,7 +843,9 @@ function db_insert(string $table, array $data): int
 function db_batch_insert(string $table, array $rows): int
 {
     if (empty($rows)) return 0;
+    $table  = db_validate_identifier($table);
     $cols   = array_keys($rows[0]);
+    foreach ($cols as $c) db_validate_identifier($c);
     $phRow  = '(' . implode(',', array_fill(0, count($cols), '?')) . ')';
     $params = [];
     foreach ($rows as $r) {
@@ -669,10 +871,11 @@ function db_update(string $table, array $data, array $conds): int
     if (empty($data))  throw new InvalidArgumentException('db_update: data array is empty');
     if (empty($conds)) throw new InvalidArgumentException('db_update: conds is empty — refusing unbounded UPDATE');
 
+    $table = db_validate_identifier($table);
     $sets   = []; $params = [];
-    foreach ($data as $col => $val)  { $sets[]   = "`{$col}` = ?"; $params[] = $val; }
+    foreach ($data as $col => $val)  { $col = db_validate_identifier($col); $sets[]   = "`{$col}` = ?"; $params[] = $val; }
     $wheres = [];
-    foreach ($conds as $col => $val) { $wheres[] = "`{$col}` = ?"; $params[] = $val; }
+    foreach ($conds as $col => $val) { $col = db_validate_identifier($col); $wheres[] = "`{$col}` = ?"; $params[] = $val; }
 
     $stmt = db_raw("UPDATE `{$table}` SET " . implode(', ', $sets) . " WHERE " . implode(' AND ', $wheres), ...$params);
     $aff  = mysqli_stmt_affected_rows($stmt);
@@ -692,11 +895,14 @@ function db_update(string $table, array $data, array $conds): int
 function db_batch_update(string $table, string $keyCol, array $rows): int
 {
     if (empty($rows)) return 0;
+    $table  = db_validate_identifier($table);
+    $keyCol = db_validate_identifier($keyCol);
     $cases  = []; $params = [];
     foreach ($rows as $r) {
         $id = $r[$keyCol];
         foreach ($r as $col => $val) {
             if ($col === $keyCol) continue;
+            $col = db_validate_identifier($col);
             $cases[$col][] = 'WHEN ? THEN ?';
             $params[]      = $id;
             $params[]      = $val;
@@ -726,7 +932,10 @@ function db_upsert(string $table, array $data, array $updateCols): int
     if (empty($data))       throw new InvalidArgumentException('db_upsert: data array is empty');
     if (empty($updateCols)) throw new InvalidArgumentException('db_upsert: updateCols is empty');
 
+    $table = db_validate_identifier($table);
     $cols = array_keys($data);
+    foreach ($cols as $c) db_validate_identifier($c);
+    foreach ($updateCols as $c) db_validate_identifier($c);
     $upd  = array_map(fn($c) => "`{$c}` = VALUES(`{$c}`)", $updateCols);
     $sql  = "INSERT INTO `{$table}` (`" . implode('`,`', $cols) . "`) VALUES ("
           . implode(',', array_fill(0, count($cols), '?')) . ")"
@@ -750,12 +959,16 @@ function db_delete(string $table, array $conds): int
 {
     if (empty($conds)) throw new InvalidArgumentException('db_delete: conds is empty — refusing unbounded DELETE');
 
+    $table  = db_validate_identifier($table);
     $wheres = []; $params = [];
     foreach ($conds as $colOp => $val) {
         if (strpos((string)$colOp, ' ') !== false) {
             [$col, $op] = explode(' ', $colOp, 2);
-            $wheres[] = "`{$col}` " . strtoupper($op) . " ?";
+            $col = db_validate_identifier($col);
+            $op  = db_validate_operator($op);
+            $wheres[] = "`{$col}` {$op} ?";
         } else {
+            $colOp = db_validate_identifier((string)$colOp);
             $wheres[] = "`{$colOp}` = ?";
         }
         $params[] = $val;
@@ -777,8 +990,10 @@ function db_delete(string $table, array $conds): int
 function db_increment(string $table, string $col, int $by, array $conds): int
 {
     if (empty($conds)) throw new InvalidArgumentException('db_increment: conds is empty');
+    $table = db_validate_identifier($table);
+    $col   = db_validate_identifier($col);
     $wheres = []; $params = [$by];
-    foreach ($conds as $c => $v) { $wheres[] = "`{$c}` = ?"; $params[] = $v; }
+    foreach ($conds as $c => $v) { $c = db_validate_identifier($c); $wheres[] = "`{$c}` = ?"; $params[] = $v; }
     $stmt = db_raw("UPDATE `{$table}` SET `{$col}` = `{$col}` + ? WHERE " . implode(' AND ', $wheres), ...$params);
     $aff  = mysqli_stmt_affected_rows($stmt);
     bumpVersion($table);
@@ -901,11 +1116,19 @@ function db_build_select(
     string $limit = '',
     array  $joins = []
 ): array {
-    $colsList = is_array($cols) ? implode(', ', $cols) : (string)$cols;
+    // Validate structural (non-parameterized) inputs
+    $table    = db_validate_identifier($table);
+    $colsList = db_validate_cols($cols);
+    $order    = db_validate_order($order);
+    $limit    = db_validate_limit($limit);
+
     $sql      = "SELECT {$colsList} FROM `{$table}`";
     $params   = [];
 
     foreach ($joins as [$type, $t, $on]) {
+        $type = db_validate_join_type($type);
+        $t    = db_validate_identifier($t);
+        $on   = db_validate_join_on($on);
         $sql .= " {$type} JOIN `{$t}` ON {$on}";
     }
 
@@ -914,10 +1137,12 @@ function db_build_select(
         foreach ($conds as $colOp => $val) {
             if (strpos((string)$colOp, ' ') !== false) {
                 [$col, $op] = explode(' ', $colOp, 2);
-                $op = strtoupper(trim($op));
+                $col = db_validate_identifier($col);
+                $op  = db_validate_operator($op);
                 switch ($op) {
                     case 'IN':
-                        $clauses[] = "`{$col}` IN (" . implode(',', array_fill(0, count($val), '?')) . ")";
+                    case 'NOT IN':
+                        $clauses[] = "`{$col}` {$op} (" . implode(',', array_fill(0, count($val), '?')) . ")";
                         $params    = array_merge($params, $val);
                         continue 2;
                     case 'BETWEEN':
@@ -925,7 +1150,8 @@ function db_build_select(
                         $params[]  = $val[0]; $params[] = $val[1];
                         continue 2;
                     case 'LIKE':
-                        $clauses[] = "`{$col}` LIKE ?";
+                    case 'NOT LIKE':
+                        $clauses[] = "`{$col}` {$op} ?";
                         $params[]  = $val;
                         continue 2;
                     default:
@@ -934,6 +1160,7 @@ function db_build_select(
                         continue 2;
                 }
             }
+            $colOp = db_validate_identifier((string)$colOp);
             if ($val === null) {
                 $clauses[] = "`{$colOp}` IS NULL";
             } else {
@@ -944,8 +1171,8 @@ function db_build_select(
         $sql .= ' WHERE ' . implode(' AND ', $clauses);
     }
 
-    if ($order) $sql .= " ORDER BY {$order}";
-    if ($limit) $sql .= " LIMIT {$limit}";
+    if ($order !== '') $sql .= " ORDER BY {$order}";
+    if ($limit !== '') $sql .= " LIMIT {$limit}";
 
     return [$sql, $params];
 }

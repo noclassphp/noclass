@@ -37,7 +37,7 @@
             </ul>
 
             <p>This allows larger applications to group related controllers, views, models, middleware, and libraries by feature area.</p>
-            <p><a href="<?= base_url('home') ?>">Back to Home</a></p>
+            <p><a href="<?= url('home') ?>">Back to Home</a></p>
         </section>
     </main>
 </body>

@@ -148,6 +148,30 @@ function route() {
 
     $segments = $requestUrl === '' ? [] : explode('/', $requestUrl);
 
+    // ── CSRF auto-verification on unsafe HTTP methods ────────────────────────
+    // Enabled by default. Disable globally with define('CSRF_AUTO', false) in
+    // config.php, or exempt specific route keys via CSRF_EXEMPT_ROUTES array.
+    // Stateless API routes that authenticate by bearer token should be exempted.
+    $csrfAutoEnabled = !defined('CSRF_AUTO') || CSRF_AUTO;
+    if ($csrfAutoEnabled) {
+        $httpMethod = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        if (in_array($httpMethod, ['POST', 'PUT', 'PATCH', 'DELETE'], true)) {
+            // Check per-route exemptions (matched against the first URL segment / route key)
+            $csrfExempt = defined('CSRF_EXEMPT_ROUTES')
+                ? (is_array(CSRF_EXEMPT_ROUTES) ? CSRF_EXEMPT_ROUTES : [])
+                : [];
+            $currentRouteKey = $segments[0] ?? '';
+            if (!in_array($currentRouteKey, $csrfExempt, true) && !csrf_verify()) {
+                if (function_exists('is_ajax') && is_ajax()) {
+                    respond_json(['error' => 'CSRF token missing or invalid'], 403);
+                    return;
+                }
+                forbiddenAction();
+                return;
+            }
+        }
+    }
+
      // ──────────────── Load & cache the routes map ────────────────
     static $routes = null;
     if ($routes === null) {
@@ -289,6 +313,10 @@ function route() {
     // A) Canonical module HTTP routing: /m/{module}/{key}/{action}/{...}
     if (isset($segments[0]) && strtolower($segments[0]) === 'm') {
         $module = $segments[1] ?? '';
+        // Sanitize the raw URL segment before any path interpolation
+        if (function_exists('module_sanitize_name')) {
+            $module = module_sanitize_name($module);
+        }
         if ($module === '' || !is_module_enabled($module)) {
             notFoundPage(); return;
         }
@@ -416,14 +444,7 @@ function route() {
         notFoundPage(); return;
     }
 
-    // 6. Dispatch daemon route if special (root only)
-    if ($module === null && $key === 'start-daemon') {
-        exec("php start-daemon.php start > /dev/null 2>&1 &");
-        respond_json(['status' => 'Daemon started in the background']);
-        return;
-    }
-
-    // 7. Load controller config// 7. Load controller config
+    // 7. Load controller config
     //var_dump($validKeys);
     $routeConfig      = $activeRoutes[$key];
     $controllerName   = $routeConfig['controller'];
@@ -1126,7 +1147,8 @@ function render_view(string $view, array $data = []): void
 
     $view = trim(str_replace('\\', '/', $view), "/ \t\n\r\0\x0B");
 
-    if ($view === '') {
+    // Reject path traversal attempts
+    if ($view === '' || strpos($view, '..') !== false) {
         notFoundAction();
         return;
     }
@@ -1197,6 +1219,12 @@ function render_route_view(
     $controllerName = trim(str_replace('\\', '/', $controllerName), "/ \t\n\r\0\x0B");
     $actionName     = trim(str_replace('\\', '/', $actionName),     "/ \t\n\r\0\x0B");
 
+    // Reject path traversal attempts
+    if (strpos($controllerName, '..') !== false || strpos($actionName, '..') !== false) {
+        notFoundAction();
+        return;
+    }
+
     // ── If the action returned a string directly, echo and exit ──────────────
     // Kept for backward compatibility with actions that return HTML strings.
     // Returned content bypasses the layout system intentionally — the action
@@ -1211,7 +1239,7 @@ function render_route_view(
 
     if ($module !== null && $module !== '') {
         // Module view: modules/{module}/views/{Controller}/{action}.php
-        $module = trim(str_replace('\\', '/', $module), "/ \t\n\r\0\x0B");
+        $module = trim(str_replace(['\\', '..'], ['/', ''], $module), "/ \t\n\r\0\x0B");
 
         $moduleViewKey  = strtolower($module . '/views/' . $controllerName . '/' . $actionName);
         $viewFile       = $GLOBALS['modules'][$moduleViewKey] ?? null;

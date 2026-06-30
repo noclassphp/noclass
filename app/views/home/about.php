@@ -38,7 +38,7 @@
                 <li>A separate HMVC-style module under <code>app/modules/demo/</code></li>
             </ul>
 
-            <p><a href="<?= base_url('home') ?>">Back to Home</a> | <a href="<?= base_url('home/starter') ?>">Automatic View Demo</a></p>
+            <p><a href="<?= url('home') ?>">Back to Home</a> | <a href="<?= url('home/starter') ?>">Automatic View Demo</a></p>
         </section>
     </main>
 </body>

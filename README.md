@@ -126,37 +126,60 @@ NoClass includes a lightweight database abstraction layer with ORM-style helper 
 Available helpers include:
 
 ```php
-db_connect();
 db_select();
+db_find();
+db_find_by();
+db_count();
+db_exists();
+db_pluck();
+db_aggregate();
+db_paginate();
+db_search();
 db_insert();
-db_update();
-db_delete();
 db_batch_insert();
+db_update();
+db_batch_update();
+db_upsert();
+db_delete();
+db_increment();
+db_fetch_all();
+db_fetch_one();
+db_fetch_value();
 db_raw();
-db_raw_secure();
+db_tx();
 ```
 
 Features include:
 
 * Secure parameter binding
+* SQL identifier / ORDER BY / LIMIT validation
 * CRUD operations
-* Batch inserts
+* Batch inserts and updates
+* Upsert (INSERT … ON DUPLICATE KEY UPDATE)
+* Aggregation (COUNT, SUM, AVG, MIN, MAX)
+* Pagination with metadata
+* Multi-column LIKE search
 * Raw SQL support
 * Transaction support
+* Chunked streaming for large result sets
 * Lightweight abstraction layer
 
 ## Security
 
 Built-in security features include:
 
-* CSRF protection
-* Content Security Policy (CSP)
-* CSP nonce generation
-* Security headers
-* XSS protection helpers
+* Automatic CSRF protection on unsafe HTTP methods (POST/PUT/PATCH/DELETE)
+* CSRF middleware and per-route exemptions
+* Content Security Policy (CSP) with nonce support
+* Security headers (HSTS, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy)
+* XSS protection helpers (`e()` output escaping)
+* SQL identifier and clause validation in the query builder
 * Input sanitisation helpers
 * Security event logging
-* Session security helpers
+* Session security (httponly, secure, samesite, strict mode, fixation prevention)
+* Password hashing and verification
+* Configurable proxy trust for forwarded headers
+* Upload validation with MIME sniffing
 
 ## Asset Management
 
@@ -191,10 +214,12 @@ NoClass includes frontend development helpers such as:
 
 * Function-based middleware
 * Route protection
+* Built-in CSRF middleware
 * Authentication checks
 * Logging middleware
 * Security middleware
 * Request filtering
+* Middleware with arguments (e.g. Role:admin, Throttle:10:60)
 
 ## Development Features
 
@@ -550,7 +575,15 @@ Or download the latest release package from GitHub.
 
 ## Configure the Application
 
-Update the configuration files:
+Copy the example environment file and configure it:
+
+```bash
+cp app/.env.example app/.env
+```
+
+Set `APP_ENV=development` in `.env` for local development. The default is `production` (debug output disabled).
+
+Update the configuration files as needed:
 
 ```text
 app/config/config.php
@@ -593,6 +626,30 @@ RewriteCond %{REQUEST_FILENAME} !-d
 
 RewriteRule ^(.*)$ index.php?url=$1 [QSA,L]
 ```
+
+### Subfolder Deployment
+
+NoClass supports deployment in a subfolder (e.g. `http://localhost/myapp/`).
+
+In `.env`, set `BASE_URL` to the origin only — do NOT include the subfolder path:
+
+```text
+# Correct:
+BASE_URL=http://localhost
+
+# WRONG — causes doubled URL paths:
+BASE_URL=http://localhost/myapp
+```
+
+The subfolder prefix is detected automatically from `SCRIPT_NAME` and stored in `BASE_URI`. The `url()` and `asset()` helpers prepend it automatically.
+
+For maximum Apache compatibility in subfolder deployments, add `RewriteBase` to `.htaccess`:
+
+```apache
+RewriteBase /myapp/
+```
+
+Always use `url()` (not `base_url()`) for internal navigation links — see the URL Helpers section.
 
 ---
 
@@ -647,20 +704,62 @@ Example:
 ```php
 return [
 
-    '/' => [
+    'home' => [
         'controller' => 'Home',
-        'action'     => 'index'
+        'action'     => ['index', 'about'],
+        'middleware'  => [],
     ],
 
-    '/about' => [
-        'controller' => 'Home',
-        'action'     => 'about'
-    ]
+    'blog' => [
+        'controller' => 'Blog',
+        'action'     => ['index', 'post/{alpha}', 'show/{num}'],
+        'middleware'  => ['Auth'],
+    ],
 
 ];
 ```
 
 This allows clean and maintainable route definitions.
+
+---
+
+# URL Helpers
+
+NoClass provides several URL helper functions. Choosing the right one matters, especially in subfolder deployments.
+
+## url() — Internal Application Links
+
+Always use `url()` for links within the application. It prepends the subfolder prefix (`BASE_URI`) automatically.
+
+```php
+<a href="<?= url('home/about') ?>">About</a>
+<a href="<?= url('blog') ?>">Blog</a>
+```
+
+In a subfolder deployment at `/myapp/`, `url('home/about')` produces `http://localhost/myapp/home/about`.
+
+At the root, it produces `http://localhost/home/about`.
+
+## base_url() — Origin Only
+
+`base_url()` returns the scheme + host + port only. It does NOT include the subfolder prefix.
+
+Use `base_url()` for external references, API callbacks, or when you explicitly need the origin without the subfolder path.
+
+```php
+$origin = base_url();  // http://localhost
+```
+
+Do NOT use `base_url()` for internal navigation links — it will produce broken links in subfolder deployments.
+
+## asset() — Public Asset URLs
+
+Use `asset()` for CSS, JavaScript, images, and other static files. It routes through `url()` and includes cache-busting.
+
+```php
+<link rel="stylesheet" href="<?= asset('css/app.css') ?>">
+<script src="<?= asset('js/app.js') ?>"></script>
+```
 
 ---
 
@@ -814,7 +913,7 @@ Example:
 </head>
 <body>
 
-    <?= content() ?>
+    <?= view_content() ?>
 
 </body>
 </html>
@@ -868,9 +967,9 @@ NoClass includes response helper functions for returning output.
 Examples include:
 
 ```php
-successResponse();
-errorResponse();
-jsonResponse();
+respond_json($data, $status);
+json_success($data);
+json_error($message, $status);
 ```
 
 These helpers make it easier to return:
@@ -928,6 +1027,7 @@ Common middleware use cases include:
 
 * Authentication
 * Authorisation
+* CSRF protection
 * Rate limiting
 * Request filtering
 * Maintenance mode
@@ -935,27 +1035,38 @@ Common middleware use cases include:
 * Logging
 * API protection
 
-Example:
+NoClass ships with a built-in `Csrf` middleware. CSRF verification is also applied automatically on POST/PUT/PATCH/DELETE by default (configurable via `CSRF_AUTO` in config.php).
+
+Example custom middleware:
 
 ```php
-function auth_middleware()
+<?php
+// app/middleware/Auth.php
+
+function Auth()
 {
     if (!session('user_id')) {
-        redirect('/login');
+        redirect(url('login'));
+        return false;
     }
+    return true;
 }
 ```
 
-Middleware files are typically stored in:
+Attach middleware to routes in `config/routes.php`:
+
+```php
+'admin' => [
+    'controller' => 'Admin',
+    'action'     => ['index', 'settings'],
+    'middleware'  => ['Auth', 'Csrf'],
+],
+```
+
+Middleware files are stored in:
 
 ```text
 app/middleware/
-```
-
-Example:
-
-```text
-app/middleware/Auth.php
 ```
 
 Unlike many frameworks, middleware remains procedural and easy to follow.
@@ -1010,15 +1121,27 @@ The goal is to simplify common database operations without introducing the compl
 Available helpers include:
 
 ```php
-db_connect();
 db_select();
+db_find();
+db_find_by();
+db_count();
+db_exists();
+db_pluck();
+db_aggregate();
+db_paginate();
+db_search();
 db_insert();
-db_update();
-db_update1();
-db_delete();
 db_batch_insert();
+db_update();
+db_batch_update();
+db_upsert();
+db_delete();
+db_increment();
+db_fetch_all();
+db_fetch_one();
+db_fetch_value();
 db_raw();
-db_raw_secure();
+db_tx();
 ```
 
 ## Selecting Records
@@ -1095,9 +1218,19 @@ db_delete(
 Example:
 
 ```php
-$result = db_raw_secure(
+$rows = db_fetch_all(
     "SELECT * FROM users WHERE email = ?",
-    $email
+    [$email]
+);
+
+$user = db_fetch_one(
+    "SELECT * FROM users WHERE id = ?",
+    [$id]
+);
+
+$count = db_fetch_value(
+    "SELECT COUNT(*) FROM orders WHERE status = ?",
+    ['pending']
 );
 ```
 
@@ -1115,26 +1248,34 @@ The framework includes a growing collection of security-related helpers and prot
 
 Cross-Site Request Forgery protection helps prevent unauthorised form submissions.
 
-Example:
+NoClass automatically verifies CSRF tokens on every POST, PUT, PATCH, and DELETE request by default. This is controlled by the `CSRF_AUTO` constant in `config/config.php`.
 
-```php
-csrf_field();
-```
-
-Within forms:
+To include a CSRF token in forms:
 
 ```php
 <form method="post">
 
     <?= csrf_field() ?>
 
+    <!-- form fields -->
+
 </form>
 ```
 
-Validation:
+For AJAX requests, the token is available via the `X-CSRF-Token` response header after each successful verification, and can be sent back in the `X-CSRF-TOKEN` request header.
+
+Manual verification (when `CSRF_AUTO` is disabled):
 
 ```php
-csrf_validate();
+if (!csrf_verify()) {
+    // token invalid
+}
+```
+
+To exempt specific routes from auto-verification (e.g. stateless API endpoints authenticated by bearer token), list their route keys in `CSRF_EXEMPT_ROUTES`:
+
+```php
+define('CSRF_EXEMPT_ROUTES', ['api', 'webhook']);
 ```
 
 ---
@@ -1440,10 +1581,11 @@ Example:
 ```php
 return [
 
-    '/blog' => [
+    'blog' => [
         'controller' => 'Blog',
-        'action' => 'index'
-    ]
+        'action'     => ['index', 'post/{alpha}'],
+        'middleware'  => [],
+    ],
 
 ];
 ```
@@ -1636,7 +1778,15 @@ db_update();
 db_delete();
 ```
 
-instead of constructing unsafe SQL manually.
+instead of constructing raw SQL manually. The helpers validate table names, column identifiers, ORDER BY, and LIMIT clauses automatically.
+
+When passing user input to sort or filter parameters, map it through a server-side allow-list:
+
+```php
+$allowed = ['name', 'created_at', 'email'];
+$sort = in_array($_GET['sort'] ?? '', $allowed) ? $_GET['sort'] : 'created_at';
+$rows = db_select('users', '*', [], $sort . ' ASC');
+```
 
 ---
 
@@ -1695,11 +1845,13 @@ Organise larger applications into independent modules.
 
 Includes:
 
-* CSRF protection
-* CSP support
-* CSP nonces
+* Automatic CSRF protection
+* CSP support with nonces
 * Secure headers
+* SQL query builder hardening
+* Session security
 * Security logging
+* Configurable proxy trust
 
 ## Modern Features
 

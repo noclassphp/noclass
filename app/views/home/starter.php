@@ -38,7 +38,7 @@
                 <li><code>data()</code> is optional and only needed when passing values to a view.</li>
             </ul>
 
-            <p><a href="<?= base_url('home') ?>">Back to Home</a> | <a href="<?= base_url('home/about') ?>">About</a> | <a href="<?= base_url('demo') ?>">HMVC Demo Module</a></p>
+            <p><a href="<?= url('home') ?>">Back to Home</a> | <a href="<?= url('home/about') ?>">About</a> | <a href="<?= url('demo') ?>">HMVC Demo Module</a></p>
         </section>
     </main>
 </body>

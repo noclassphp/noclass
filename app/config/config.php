@@ -12,7 +12,10 @@
 // ── Application ───────────────────────────────────────────────────────────────
 define('WEBSITE_NAME',              'NoClass Demo');
 define('BASE_URL',                  env('BASE_URL', 'localhost'));
-define('APP_ENV',                   env('APP_ENV', 'development'));
+
+// APP_ENV defaults to 'production' so DEBUG is off unless explicitly overridden.
+// Set APP_ENV=development in .env for local development.
+define('APP_ENV',                   env('APP_ENV', 'production'));
 define('DEBUG',                     env_bool('APP_DEBUG', APP_ENV !== 'production'));
 define('APP_DEBUG',                 DEBUG);
 
@@ -34,8 +37,23 @@ define('DEFAULT_LAYOUT',            'main');
 
 // ── Security / Session ────────────────────────────────────────────────────────
 define('SESSION_SAMESITE',          'Lax');
+
+// ── Proxy trust ───────────────────────────────────────────────────────────────
+// Set to true when the app is behind a reverse proxy (nginx, Cloudflare,
+// AWS ALB/ELB) that sets X-Forwarded-Proto. Without this, is_https() will
+// NOT trust the forwarded header — preventing client-side spoofing.
+define('TRUST_PROXY',               env_bool('TRUST_PROXY', false));
+
 define('VIEW_XSS_AUDIT',            false);
 define('ALLOW_UNDECLARED_ACTIONS',  false);
+
+// ── CSRF auto-verification ────────────────────────────────────────────────
+// When true (default), the router automatically verifies the CSRF token
+// on every POST / PUT / PATCH / DELETE request. Set to false to disable
+// global auto-verification (e.g. if all your routes are stateless APIs).
+// Per-route exemptions: list route keys in CSRF_EXEMPT_ROUTES.
+define('CSRF_AUTO',                 true);
+define('CSRF_EXEMPT_ROUTES',        []);  // e.g. ['api', 'webhook']
 
 // CSP — opt-in. When true, send_security_headers() emits a CSP header.
 /* All inline <script> and <style> tags in views must carry nonce="<?= csp_nonce() ?>" */

@@ -37,9 +37,9 @@
             <p><?= e(data('intro')) ?></p>
             <p>For more info visit <a href="https://noclass.org">https://noclass.org</a></p>
             <div class="links">
-                <a class="button" href="<?= base_url('home/about') ?>">About NoClass</a>
-                <a class="button secondary" href="<?= base_url('home/starter') ?>">Automatic View Demo</a>
-                <a class="button secondary" href="<?= base_url('demo') ?>">HMVC Module Demo</a>
+                <a class="button" href="<?= url('home/about') ?>">About NoClass</a>
+                <a class="button secondary" href="<?= url('home/starter') ?>">Automatic View Demo</a>
+                <a class="button secondary" href="<?= url('demo') ?>">HMVC Module Demo</a>
             </div>
         </section>
 
